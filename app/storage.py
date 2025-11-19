@@ -1,0 +1,61 @@
+"""
+Storage management for round trip bookings
+"""
+
+from typing import Dict, Any, Optional
+from datetime import datetime, timedelta
+from app.config import ROUND_TRIP_CLEANUP_HOURS
+
+# In-memory storage for round trip bookings
+# Key: order_display_id, Value: booking data
+round_trip_bookings: Dict[str, Dict[str, Any]] = {}
+
+
+def cleanup_old_bookings():
+    """
+    Clean up old round trip bookings (older than configured hours)
+    """
+    current_time = datetime.now()
+    keys_to_remove = []
+    
+    for order_id, booking_info in round_trip_bookings.items():
+        if current_time - booking_info.get("first_received_at", current_time) > timedelta(hours=ROUND_TRIP_CLEANUP_HOURS):
+            keys_to_remove.append(order_id)
+    
+    for key in keys_to_remove:
+        del round_trip_bookings[key]
+        print(f"CLEANUP: Removed old round trip booking for order {key}")
+
+
+def store_round_trip_booking(order_id: str, booking_data: Dict[str, Any], flights: list):
+    """
+    Store a round trip booking for later combination
+    """
+    round_trip_bookings[order_id] = {
+        "booking_data": booking_data,
+        "flights": flights,
+        "first_received_at": datetime.now()
+    }
+
+
+def get_round_trip_booking(order_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get a stored round trip booking by order ID
+    """
+    return round_trip_bookings.get(order_id)
+
+
+def remove_round_trip_booking(order_id: str):
+    """
+    Remove a round trip booking from storage
+    """
+    if order_id in round_trip_bookings:
+        del round_trip_bookings[order_id]
+
+
+def has_round_trip_booking(order_id: str) -> bool:
+    """
+    Check if a round trip booking exists for the given order ID
+    """
+    return order_id in round_trip_bookings
+

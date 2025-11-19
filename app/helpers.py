@@ -1,0 +1,361 @@
+"""
+Helper functions for booking data processing
+"""
+
+from typing import Dict, Any, List, Optional
+from datetime import datetime
+import re
+import country_converter as cc
+
+
+def is_round_trip(booking_data: Dict[str, Any]) -> bool:
+    """
+    Check if this is a round trip booking based on order field
+    """
+    return booking_data.get("order") is not None and booking_data.get("order", {}).get("display_id") is not None
+
+
+def get_order_display_id(booking_data: Dict[str, Any]) -> Optional[str]:
+    """
+    Get the order display ID for round trip bookings
+    """
+    order = booking_data.get("order")
+    if order and isinstance(order, dict):
+        return order.get("display_id")
+    return None
+
+
+def extract_flight_numbers(booking_data: Dict[str, Any]) -> List[int]:
+    """
+    Extract flight numbers from booking data (legacy method - kept for backward compatibility)
+    This will be replaced by get_flight_identifiers_from_api which uses the Airmax API
+    """
+    flights = []
+    booking_custom_fields = {field["name"]: field["value"] for field in booking_data.get("custom_field_values", [])}
+    
+    for field_name, field_value in booking_custom_fields.items():
+        if "Flight Number" in field_name:
+            # Extract flight number from field name (e.g., "Flight Number 516" -> 516)
+            numbers = re.findall(r'\d+', field_name)
+            if numbers:
+                flights.append(int(numbers[0]))
+                continue
+            
+            # If no number in field name, try to extract from field value if it's not empty
+            if field_value.strip():
+                try:
+                    flight_num = int(field_value.strip())
+                    flights.append(flight_num)
+                except ValueError:
+                    pass
+    
+    # If no flight numbers found in custom fields, fall back to availability item pk
+    if not flights and booking_data.get("availability") and booking_data["availability"].get("item"):
+        flights.append(booking_data["availability"]["item"]["pk"])
+    
+    return flights
+
+
+async def get_flight_identifiers_from_api(booking_data: Dict[str, Any]) -> List[int]:
+    """
+    Get flight identifiers by searching flights via Airmax API
+    This is the new method that replaces extract_flight_numbers
+    """
+    from app.api_client import search_flights
+    
+    try:
+        # Step 1: Build flight search payload
+        search_payload = build_flight_search_payload(booking_data)
+        print(f"Built flight search payload: {search_payload}")
+        
+        # Step 2: Call flight search API
+        search_result = await search_flights(search_payload)
+        
+        if not search_result.get("success"):
+            print(f"WARNING: Flight search failed: {search_result.get('error')}")
+            # Fallback to old method
+            return extract_flight_numbers(booking_data)
+        
+        # Step 3: Extract flight list from response
+        flight_list_response = search_result.get("response", [])
+        
+        # Handle different response formats - could be a list directly or wrapped in an object
+        if isinstance(flight_list_response, dict):
+            # Try common keys for flight list
+            flight_list = flight_list_response.get("flights", []) or flight_list_response.get("FlightList", []) or flight_list_response.get("data", [])
+        elif isinstance(flight_list_response, list):
+            flight_list = flight_list_response
+        else:
+            print(f"WARNING: Unexpected flight search response format: {type(flight_list_response)}")
+            # Fallback to old method
+            return extract_flight_numbers(booking_data)
+        
+        if not flight_list:
+            print("WARNING: No flights found in search response")
+            # Fallback to old method
+            return extract_flight_numbers(booking_data)
+        
+        # Step 4: Extract FlightDate and FlightNumber from booking
+        flight_date, flight_number = extract_flight_date_and_number(booking_data)
+        
+        if not flight_date or not flight_number:
+            print(f"WARNING: Could not extract flight_date or flight_number from booking")
+            # Fallback to old method
+            return extract_flight_numbers(booking_data)
+        
+        # Step 5: Find matching flight identifier
+        flight_identifier = find_flight_identifier(flight_list, flight_date, flight_number)
+        
+        if flight_identifier:
+            print(f"SUCCESS: Found flight identifier: {flight_identifier}")
+            return [flight_identifier]
+        else:
+            print("WARNING: Could not find matching flight identifier")
+            # Fallback to old method
+            return extract_flight_numbers(booking_data)
+            
+    except Exception as e:
+        print(f"ERROR: Exception in get_flight_identifiers_from_api: {str(e)}")
+        # Fallback to old method
+        return extract_flight_numbers(booking_data)
+
+
+def determine_flight_directions(existing_flights: List[int], current_flights: List[int], 
+                              existing_booking: Dict[str, Any], current_booking: Dict[str, Any]) -> tuple[List[int], List[int]]:
+    """
+    Determine which flights are depart and which are return based on order
+    First request is return flight, second request is depart flight
+    """
+    # In round trip bookings:
+    # First request (existing_booking) = return flight
+    # Second request (current_booking) = depart flight
+    
+    print(f"ROUND TRIP: First request (existing) = Return, Second request (current) = Depart")
+    
+    # So existing_flights should be return_flights, current_flights should be depart_flights
+    depart_flights = current_flights  # Second request is depart
+    return_flights = existing_flights  # First request is return
+    
+    return depart_flights, return_flights
+
+
+def get_country_iso3(country_name: str) -> str:
+    """
+    Convert country name to ISO3 code using country-converter
+    """
+    if not country_name:
+        return ""
+    
+    try:
+        # Try to convert country name to ISO3 code
+        iso3_code = cc.convert(country_name, to='ISO3')
+        
+        # If conversion returns the same string, it means no match was found
+        if iso3_code == country_name:
+            print(f"WARNING: Country '{country_name}' not found in country converter, using original name")
+            return country_name
+        
+        print(f"SUCCESS: Converted '{country_name}' to ISO3: '{iso3_code}'")
+        return iso3_code
+        
+    except Exception as e:
+        print(f"WARNING: Error converting country '{country_name}': {str(e)}, using original name")
+        return country_name
+
+
+def get_flight_direction(booking_data: Dict[str, Any]) -> str:
+    """
+    Determine if a flight is depart or return based on the availability item name
+    (Kept for potential future use, though not currently used in round trip logic)
+    """
+    item_name = booking_data.get("availability", {}).get("item", {}).get("name", "")
+    
+    # Check for common patterns in flight direction
+    if "Fort Lauderdale Executive (FXE)" in item_name and "South Andros (COX)" in item_name:
+        if item_name.startswith("Fort Lauderdale Executive (FXE)"):
+            return "depart"  # FXE -> COX is depart
+        else:
+            return "return"  # COX -> FXE is return
+    elif "South Andros (COX)" in item_name and "Fort Lauderdale Executive (FXE)" in item_name:
+        if item_name.startswith("South Andros (COX)"):
+            return "return"  # COX -> FXE is return
+        else:
+            return "depart"  # FXE -> COX is depart
+    
+    # Default fallback - assume it's depart if we can't determine
+    print(f"WARNING: Could not determine flight direction for: {item_name}")
+    return "depart"
+
+
+def extract_airport_codes(item_name: str) -> tuple:
+    """
+    Extract origin and destination airport codes from item name
+    Example: "Fort Lauderdale Executive (FXE) → South Andros (COX)" -> ("FXE", "COX")
+    """
+    # Pattern to match airport codes in parentheses
+    pattern = r'\(([A-Z]{3})\)'
+    matches = re.findall(pattern, item_name)
+    
+    if len(matches) >= 2:
+        return matches[0], matches[1]
+    elif len(matches) == 1:
+        # Only one code found, might be a different format
+        return matches[0], None
+    
+    return None, None
+
+
+def build_flight_search_payload(booking_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build flight search payload from booking data
+    """
+    availability = booking_data.get("availability", {})
+    item = availability.get("item", {})
+    item_name = item.get("name", "")
+    start_at = availability.get("start_at", "")
+    
+    # Extract origin and destination
+    origin, destination = extract_airport_codes(item_name)
+    
+    if not origin or not destination:
+        raise ValueError(f"Could not extract airport codes from item name: {item_name}")
+    
+    # Extract date from start_at (format: "2025-10-28T08:00:00-0400")
+    try:
+        # Fix timezone format: convert -0400 to -04:00 for ISO format
+        if start_at and not start_at.endswith('Z'):
+            # Try to fix timezone format (e.g., -0400 -> -04:00)
+            import re
+            timezone_pattern = r'([+-])(\d{2})(\d{2})$'
+            match = re.search(timezone_pattern, start_at)
+            if match:
+                sign, hours, minutes = match.groups()
+                start_at = start_at[:match.start()] + f"{sign}{hours}:{minutes}"
+        
+        # Parse ISO format date
+        date_obj = datetime.fromisoformat(start_at.replace('Z', '+00:00'))
+        date_str = date_obj.strftime("%Y-%m-%d")
+    except Exception as e:
+        raise ValueError(f"Could not parse date from start_at: {start_at}, error: {e}")
+    
+    # Count passengers
+    customers = booking_data.get("customers", [])
+    adult_count = 1
+    infant_count = 0
+    
+    # Build payload
+    payload = {
+        "DepartDateStart": date_str,
+        "DepartDateEnd": date_str,
+        "DepartOrigin": origin,
+        "DepartDestination": destination,
+        "AdultCount": adult_count,
+        "InfantCount": infant_count,
+        "IsDepartFirstClass": False
+    }
+    
+    return payload
+
+
+def extract_flight_date_and_number(booking_data: Dict[str, Any]) -> tuple:
+    """
+    Extract FlightDate and FlightNumber from booking data
+    Returns: (FlightDate, FlightNumber)
+    """
+    # Extract FlightDate from availability.start_at
+    availability = booking_data.get("availability", {})
+    start_at = availability.get("start_at", "")
+    
+    flight_date = None
+    if start_at:
+        try:
+            # Parse ISO format date and return as-is (with time)
+            flight_date = start_at
+        except Exception as e:
+            print(f"WARNING: Could not parse flight date: {start_at}, error: {e}")
+    
+    # Extract FlightNumber from custom_field_values
+    flight_number = None
+    booking_custom_fields = booking_data.get("custom_field_values", [])
+    
+    for field in booking_custom_fields:
+        field_name = field.get("name", "")
+        if "Flight Number" in field_name:
+            # Extract flight number from field name (e.g., "Flight Number 516" -> "516")
+            numbers = re.findall(r'\d+', field_name)
+            if numbers:
+                flight_number = numbers[0]
+                break
+            # Or try to get from display_value if available
+            display_value = field.get("display_value", "")
+            if display_value and display_value.strip().isdigit():
+                flight_number = display_value.strip()
+                break
+    
+    return flight_date, flight_number
+
+
+def find_flight_identifier(flight_list: List[Dict[str, Any]], flight_date: str, flight_number: str) -> Optional[int]:
+    """
+    Find flight identifier from flight list that matches FlightDate and FlightNumber
+    """
+    if not flight_date or not flight_number:
+        print(f"WARNING: Cannot find flight identifier - missing flight_date or flight_number")
+        return None
+    
+    # Parse the flight_date to get just the date part for comparison
+    try:
+        # Fix timezone format: convert -0400 to -04:00 for ISO format
+        flight_date_fixed = flight_date
+        if flight_date and not flight_date.endswith('Z'):
+            timezone_pattern = r'([+-])(\d{2})(\d{2})$'
+            match = re.search(timezone_pattern, flight_date)
+            if match:
+                sign, hours, minutes = match.groups()
+                flight_date_fixed = flight_date[:match.start()] + f"{sign}{hours}:{minutes}"
+        
+        # Parse ISO format: "2025-10-28T08:00:00-04:00"
+        date_obj = datetime.fromisoformat(flight_date_fixed.replace('Z', '+00:00'))
+        date_only = date_obj.strftime("%Y-%m-%d")
+        time_part = date_obj.strftime("%H:%M:%S")
+    except Exception as e:
+        print(f"WARNING: Could not parse flight_date: {flight_date}, error: {e}")
+        return None
+    
+    print(f"Searching for flight: Date={date_only}, Time={time_part}, FlightNumber={flight_number}")
+    
+    # Search through flight list
+    for flight in flight_list:
+        # Check flight date and number
+        flight_date_str = flight.get("FlightDate", "")
+        flight_number_str = str(flight.get("FlightNumber", ""))
+        
+        # Parse flight date for comparison
+        try:
+            # Fix timezone format if needed
+            flight_date_fixed = flight_date_str
+            if flight_date_str and not flight_date_str.endswith('Z'):
+                timezone_pattern = r'([+-])(\d{2})(\d{2})$'
+                match = re.search(timezone_pattern, flight_date_str)
+                if match:
+                    sign, hours, minutes = match.groups()
+                    flight_date_fixed = flight_date_str[:match.start()] + f"{sign}{hours}:{minutes}"
+            
+            flight_date_obj = datetime.fromisoformat(flight_date_fixed.replace('Z', '+00:00'))
+            flight_date_only = flight_date_obj.strftime("%Y-%m-%d")
+            flight_time_part = flight_date_obj.strftime("%H:%M:%S")
+        except Exception as e:
+            continue
+        
+        # Match date and flight number
+        if flight_date_only == date_only and flight_number_str == flight_number:
+            flight_identifier = flight.get("FlightIdentifier") or flight.get("Identifier") or flight.get("Id")
+            if flight_identifier:
+                print(f"Found matching flight: FlightIdentifier={flight_identifier}, FlightDate={flight_date_str}, FlightNumber={flight_number_str}")
+                return int(flight_identifier)
+            else:
+                print(f"WARNING: Found matching flight but no identifier field: {flight}")
+    
+    print(f"WARNING: No matching flight found for Date={date_only}, FlightNumber={flight_number}")
+    return None
+
