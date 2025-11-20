@@ -11,6 +11,7 @@ from app.config import (
     AIRMAX_API_BASE_URL,
     AIRMAX_FLIGHT_SEARCH_ENDPOINT
 )
+from app.logger import log_api_request, log_error, log_info
 
 
 async def send_to_makersuite_api(transformed_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -24,8 +25,7 @@ async def send_to_makersuite_api(transformed_data: Dict[str, Any]) -> Dict[str, 
     }
     
     try:
-        print(f"API KEY: Sending request to MakerSuite API with headers: {headers}")
-        print(f"REQUEST: Request payload: {json.dumps(transformed_data, indent=2)}")
+        log_info("Sending request to MakerSuite API", {"url": MAKERSUITE_API_URL, "payload": transformed_data})
         
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -35,20 +35,29 @@ async def send_to_makersuite_api(transformed_data: Dict[str, Any]) -> Dict[str, 
                 timeout=30.0
             )
             
-            print(f"MakerSuite API Response Status: {response.status_code}")
-            print(f"MakerSuite API Response: {response.text}")
+            log_info(f"MakerSuite API Response Status: {response.status_code}")
             
             if response.status_code == 200:
-                return {"success": True, "response": response.json()}
+                response_data = response.json()
+                log_api_request("MakerSuite", MAKERSUITE_API_URL, transformed_data, response_data)
+                return {"success": True, "response": response_data}
             else:
-                return {"success": False, "error": f"API returned status {response.status_code}: {response.text}"}
+                error_msg = f"API returned status {response.status_code}: {response.text}"
+                log_api_request("MakerSuite", MAKERSUITE_API_URL, transformed_data, None, error_msg)
+                return {"success": False, "error": error_msg}
                 
-    except httpx.TimeoutException:
-        return {"success": False, "error": "Request timeout"}
+    except httpx.TimeoutException as e:
+        error_msg = "Request timeout"
+        log_error("MakerSuite API request timeout", str(e), {"url": MAKERSUITE_API_URL})
+        return {"success": False, "error": error_msg}
     except httpx.RequestError as e:
-        return {"success": False, "error": f"Request error: {str(e)}"}
+        error_msg = f"Request error: {str(e)}"
+        log_error("MakerSuite API request error", str(e), {"url": MAKERSUITE_API_URL})
+        return {"success": False, "error": error_msg}
     except Exception as e:
-        return {"success": False, "error": f"Unexpected error: {str(e)}"}
+        error_msg = f"Unexpected error: {str(e)}"
+        log_error("MakerSuite API unexpected error", str(e), {"url": MAKERSUITE_API_URL})
+        return {"success": False, "error": error_msg}
 
 
 async def search_flights(search_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -64,8 +73,7 @@ async def search_flights(search_payload: Dict[str, Any]) -> Dict[str, Any]:
     url = f"{AIRMAX_API_BASE_URL}{AIRMAX_FLIGHT_SEARCH_ENDPOINT}"
     
     try:
-        print(f"FLIGHT SEARCH: Sending request to {url}")
-        print(f"FLIGHT SEARCH: Request payload: {json.dumps(search_payload, indent=2)}")
+        log_info("Sending flight search request", {"url": url, "payload": search_payload})
         
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -75,18 +83,27 @@ async def search_flights(search_payload: Dict[str, Any]) -> Dict[str, Any]:
                 timeout=30.0
             )
             
-            print(f"FLIGHT SEARCH: Response Status: {response.status_code}")
-            print(f"FLIGHT SEARCH: Response: {response.text}")
+            log_info(f"Flight Search API Response Status: {response.status_code}")
             
             if response.status_code == 200:
-                return {"success": True, "response": response.json()}
+                response_data = response.json()
+                log_api_request("Airmax Flight Search", url, search_payload, response_data)
+                return {"success": True, "response": response_data}
             else:
-                return {"success": False, "error": f"API returned status {response.status_code}: {response.text}"}
+                error_msg = f"API returned status {response.status_code}: {response.text}"
+                log_api_request("Airmax Flight Search", url, search_payload, None, error_msg)
+                return {"success": False, "error": error_msg}
                 
-    except httpx.TimeoutException:
-        return {"success": False, "error": "Request timeout"}
+    except httpx.TimeoutException as e:
+        error_msg = "Request timeout"
+        log_error("Flight Search API request timeout", str(e), {"url": url})
+        return {"success": False, "error": error_msg}
     except httpx.RequestError as e:
-        return {"success": False, "error": f"Request error: {str(e)}"}
+        error_msg = f"Request error: {str(e)}"
+        log_error("Flight Search API request error", str(e), {"url": url})
+        return {"success": False, "error": error_msg}
     except Exception as e:
-        return {"success": False, "error": f"Unexpected error: {str(e)}"}
+        error_msg = f"Unexpected error: {str(e)}"
+        log_error("Flight Search API unexpected error", str(e), {"url": url})
+        return {"success": False, "error": error_msg}
 

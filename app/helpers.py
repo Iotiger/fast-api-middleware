@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 import re
 import country_converter as cc
+from app.logger import log_info, log_warning, log_error, log_debug
 
 
 def is_round_trip(booking_data: Dict[str, Any]) -> bool:
@@ -66,13 +67,13 @@ async def get_flight_identifiers_from_api(booking_data: Dict[str, Any]) -> List[
     try:
         # Step 1: Build flight search payload
         search_payload = build_flight_search_payload(booking_data)
-        print(f"Built flight search payload: {search_payload}")
+        log_debug("Built flight search payload", {"search_payload": search_payload})
         
         # Step 2: Call flight search API
         search_result = await search_flights(search_payload)
         
         if not search_result.get("success"):
-            print(f"WARNING: Flight search failed: {search_result.get('error')}")
+            log_warning("Flight search failed", {"error": search_result.get('error'), "search_payload": search_payload})
             # Fallback to old method
             return extract_flight_numbers(booking_data)
         
@@ -86,12 +87,12 @@ async def get_flight_identifiers_from_api(booking_data: Dict[str, Any]) -> List[
         elif isinstance(flight_list_response, list):
             flight_list = flight_list_response
         else:
-            print(f"WARNING: Unexpected flight search response format: {type(flight_list_response)}")
+            log_warning("Unexpected flight search response format", {"response_type": str(type(flight_list_response))})
             # Fallback to old method
             return extract_flight_numbers(booking_data)
         
         if not flight_list:
-            print("WARNING: No flights found in search response")
+            log_warning("No flights found in search response", {"search_payload": search_payload})
             # Fallback to old method
             return extract_flight_numbers(booking_data)
         
@@ -99,7 +100,7 @@ async def get_flight_identifiers_from_api(booking_data: Dict[str, Any]) -> List[
         flight_date, flight_number = extract_flight_date_and_number(booking_data)
         
         if not flight_date or not flight_number:
-            print(f"WARNING: Could not extract flight_date or flight_number from booking")
+            log_warning("Could not extract flight_date or flight_number from booking", {"booking_data": booking_data})
             # Fallback to old method
             return extract_flight_numbers(booking_data)
         
@@ -107,15 +108,15 @@ async def get_flight_identifiers_from_api(booking_data: Dict[str, Any]) -> List[
         flight_identifier = find_flight_identifier(flight_list, flight_date, flight_number)
         
         if flight_identifier:
-            print(f"SUCCESS: Found flight identifier: {flight_identifier}")
+            log_info("Found flight identifier", {"flight_identifier": flight_identifier, "flight_date": flight_date, "flight_number": flight_number})
             return [flight_identifier]
         else:
-            print("WARNING: Could not find matching flight identifier")
+            log_warning("Could not find matching flight identifier", {"flight_date": flight_date, "flight_number": flight_number, "flight_list_count": len(flight_list)})
             # Fallback to old method
             return extract_flight_numbers(booking_data)
             
     except Exception as e:
-        print(f"ERROR: Exception in get_flight_identifiers_from_api: {str(e)}")
+        log_error("Exception in get_flight_identifiers_from_api", str(e), {"booking_data": booking_data})
         # Fallback to old method
         return extract_flight_numbers(booking_data)
 
@@ -130,7 +131,7 @@ def determine_flight_directions(existing_flights: List[int], current_flights: Li
     # First request (existing_booking) = return flight
     # Second request (current_booking) = depart flight
     
-    print(f"ROUND TRIP: First request (existing) = Return, Second request (current) = Depart")
+    log_debug("Determining flight directions: First request (existing) = Return, Second request (current) = Depart")
     
     # So existing_flights should be return_flights, current_flights should be depart_flights
     depart_flights = current_flights  # Second request is depart
@@ -152,14 +153,14 @@ def get_country_iso3(country_name: str) -> str:
         
         # If conversion returns the same string, it means no match was found
         if iso3_code == country_name:
-            print(f"WARNING: Country '{country_name}' not found in country converter, using original name")
+            log_warning(f"Country '{country_name}' not found in country converter, using original name", {"country_name": country_name})
             return country_name
         
-        print(f"SUCCESS: Converted '{country_name}' to ISO3: '{iso3_code}'")
+        log_debug(f"Converted '{country_name}' to ISO3: '{iso3_code}'", {"country_name": country_name, "iso3_code": iso3_code})
         return iso3_code
         
     except Exception as e:
-        print(f"WARNING: Error converting country '{country_name}': {str(e)}, using original name")
+        log_warning(f"Error converting country '{country_name}'", None, {"country_name": country_name, "error": str(e)})
         return country_name
 
 
@@ -183,7 +184,7 @@ def get_flight_direction(booking_data: Dict[str, Any]) -> str:
             return "depart"  # FXE -> COX is depart
     
     # Default fallback - assume it's depart if we can't determine
-    print(f"WARNING: Could not determine flight direction for: {item_name}")
+    log_warning(f"Could not determine flight direction for: {item_name}", {"item_name": item_name})
     return "depart"
 
 
@@ -272,7 +273,7 @@ def extract_flight_date_and_number(booking_data: Dict[str, Any]) -> tuple:
             # Parse ISO format date and return as-is (with time)
             flight_date = start_at
         except Exception as e:
-            print(f"WARNING: Could not parse flight date: {start_at}, error: {e}")
+            log_warning("Could not parse flight date", {"start_at": start_at, "error": str(e)})
     
     # Extract FlightNumber from custom_field_values
     flight_number = None
@@ -300,7 +301,7 @@ def find_flight_identifier(flight_list: List[Dict[str, Any]], flight_date: str, 
     Find flight identifier from flight list that matches FlightDate and FlightNumber
     """
     if not flight_date or not flight_number:
-        print(f"WARNING: Cannot find flight identifier - missing flight_date or flight_number")
+        log_warning("Cannot find flight identifier - missing flight_date or flight_number", {"flight_date": flight_date, "flight_number": flight_number})
         return None
     
     # Parse the flight_date to get just the date part for comparison
@@ -319,10 +320,10 @@ def find_flight_identifier(flight_list: List[Dict[str, Any]], flight_date: str, 
         date_only = date_obj.strftime("%Y-%m-%d")
         time_part = date_obj.strftime("%H:%M:%S")
     except Exception as e:
-        print(f"WARNING: Could not parse flight_date: {flight_date}, error: {e}")
+        log_warning("Could not parse flight_date", {"flight_date": flight_date, "error": str(e)})
         return None
     
-    print(f"Searching for flight: Date={date_only}, Time={time_part}, FlightNumber={flight_number}")
+    log_debug("Searching for flight", {"date": date_only, "time": time_part, "flight_number": flight_number})
     
     # Search through flight list
     for flight in flight_list:
@@ -351,11 +352,11 @@ def find_flight_identifier(flight_list: List[Dict[str, Any]], flight_date: str, 
         if flight_date_only == date_only and flight_number_str == flight_number:
             flight_identifier = flight.get("FlightIdentifier") or flight.get("Identifier") or flight.get("Id")
             if flight_identifier:
-                print(f"Found matching flight: FlightIdentifier={flight_identifier}, FlightDate={flight_date_str}, FlightNumber={flight_number_str}")
+                log_info("Found matching flight", {"flight_identifier": flight_identifier, "flight_date": flight_date_str, "flight_number": flight_number_str})
                 return int(flight_identifier)
             else:
-                print(f"WARNING: Found matching flight but no identifier field: {flight}")
+                log_warning("Found matching flight but no identifier field", {"flight": flight})
     
-    print(f"WARNING: No matching flight found for Date={date_only}, FlightNumber={flight_number}")
+    log_warning("No matching flight found", {"date": date_only, "flight_number": flight_number, "flight_list_count": len(flight_list)})
     return None
 

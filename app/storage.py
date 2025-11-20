@@ -5,6 +5,7 @@ Storage management for round trip bookings
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from app.config import ROUND_TRIP_CLEANUP_HOURS
+from app.logger import log_info
 
 # In-memory storage for round trip bookings
 # Key: order_display_id, Value: booking data
@@ -24,7 +25,7 @@ def cleanup_old_bookings():
     
     for key in keys_to_remove:
         del round_trip_bookings[key]
-        print(f"CLEANUP: Removed old round trip booking for order {key}")
+        log_info(f"Removed old round trip booking for order {key}", {"order_id": key})
 
 
 def store_round_trip_booking(order_id: str, booking_data: Dict[str, Any], flights: list):
