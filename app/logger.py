@@ -10,6 +10,7 @@ from pathlib import Path
 # Default log file path
 LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "webhook_logs.json"
+WEBHOOK_DATA_FILE = LOG_DIR / "webhook_requests.json"
 
 
 def ensure_log_dir():
@@ -103,4 +104,33 @@ def log_api_request(api_name: str, url: str, payload: Dict[str, Any], response: 
         log_error(f"API request failed: {api_name}", error, context)
     else:
         log_info(f"API request successful: {api_name}", context)
+
+
+def save_webhook_request_body(webhook_data: Dict[str, Any], client_ip: Optional[str] = None, url: Optional[str] = None):
+    """
+    Save FareHarbor webhook request body to JSON file
+    
+    Args:
+        webhook_data: The parsed webhook request body data
+        client_ip: Client IP address (optional)
+        url: Request URL (optional)
+    """
+    ensure_log_dir()
+    
+    # Create entry with metadata and webhook data
+    webhook_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "client_ip": client_ip,
+        "url": str(url) if url else None,
+        "webhook_data": webhook_data
+    }
+    
+    # Append to JSON file (one JSON object per line - JSONL format)
+    try:
+        with open(WEBHOOK_DATA_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(webhook_entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        # Fallback to print if file write fails
+        print(f"ERROR: Failed to save webhook request body: {e}")
+        print(f"Webhook entry: {webhook_entry}")
 
