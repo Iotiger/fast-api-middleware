@@ -87,14 +87,14 @@ def _transform_passengers(booking_data: Dict[str, Any], booking_custom_fields: D
         custom_fields = {field["name"]: field["display_value"] for field in customer.get("custom_field_values", [])}
         
         # Map FareHarbor fields to MakerSuite format
-        passenger["FirstName"] = custom_fields.get("First Name", "")
-        passenger["LastName"] = custom_fields.get("Last Name", "")
+        passenger["FirstName"] = custom_fields.get("Passenger First Name", "")
+        passenger["LastName"] = custom_fields.get("Passenger Last Name", "")
         
         # Convert date format from MM/DD/YYYY to YYYY-MM-DD
         passenger["DateOfBirth"] = _convert_date_format(custom_fields.get("Date of Birth", ""))
         
         # Map gender
-        gender_display = custom_fields.get("Gender", "")
+        gender_display = custom_fields.get("Passenger Sex", "")
         passenger["Gender"] = "M" if "Male" in gender_display else "F"
         
         # Contact information
@@ -112,7 +112,7 @@ def _transform_passengers(booking_data: Dict[str, Any], booking_custom_fields: D
         
         # Weight
         passenger["Weight"] = int(custom_fields.get("Passenger Weight", 0)) if custom_fields.get("Passenger Weight", "").isdigit() else 0
-        passenger["BahamasStay"] = "BSStay"  # Default value as specified
+        passenger["BahamasStay"] = custom_fields.get("Bahamas Hotel", "BHS")  # Default value as specified
         
         # Address information from booking-level custom fields
         passenger["AddressStreet"] = booking_custom_fields.get("Address Street", "")

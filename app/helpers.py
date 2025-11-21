@@ -262,6 +262,11 @@ def extract_flight_date_and_number(booking_data: Dict[str, Any]) -> tuple:
     """
     Extract FlightDate and FlightNumber from booking data
     Returns: (FlightDate, FlightNumber)
+    
+    Flight number extraction priority:
+    1. From availability.item.headline (e.g., "N146WM - 2112" -> "2112")
+    2. From custom_field_values with "Flight Number" in name
+    3. Fallback to None
     """
     # Extract FlightDate from availability.start_at
     availability = booking_data.get("availability", {})
@@ -275,23 +280,46 @@ def extract_flight_date_and_number(booking_data: Dict[str, Any]) -> tuple:
         except Exception as e:
             log_warning("Could not parse flight date", {"start_at": start_at, "error": str(e)})
     
-    # Extract FlightNumber from custom_field_values
+    # Extract FlightNumber - Priority 1: From item headline (e.g., "N146WM - 2112")
     flight_number = None
-    booking_custom_fields = booking_data.get("custom_field_values", [])
+    headline = availability.get("headline", "")
     
-    for field in booking_custom_fields:
-        field_name = field.get("name", "")
-        if "Flight Number" in field_name:
-            # Extract flight number from field name (e.g., "Flight Number 516" -> "516")
-            numbers = re.findall(r'\d+', field_name)
-            if numbers:
-                flight_number = numbers[0]
-                break
-            # Or try to get from display_value if available
-            display_value = field.get("display_value", "")
-            if display_value and display_value.strip().isdigit():
-                flight_number = display_value.strip()
-                break
+    if headline:
+        # Extract flight number from headline format: "N146WM - 2112" -> "2112"
+        # Pattern: look for digits after " - " or at the end
+        headline_match = re.search(r'\s*-\s*(\d+)$', headline)
+        if headline_match:
+            flight_number = headline_match.group(1)
+            log_debug("Extracted flight number from headline", {"headline": headline, "flight_number": flight_number})
+        else:
+            # Try to find any sequence of digits at the end
+            digits_match = re.search(r'(\d+)$', headline.strip())
+            if digits_match:
+                flight_number = digits_match.group(1)
+                log_debug("Extracted flight number from headline (fallback)", {"headline": headline, "flight_number": flight_number})
+    
+    # Priority 2: Extract FlightNumber from custom_field_values if not found in headline
+    if not flight_number:
+        booking_custom_fields = booking_data.get("custom_field_values", [])
+        
+        for field in booking_custom_fields:
+            field_name = field.get("name", "")
+            if "Flight Number" in field_name:
+                # Extract flight number from field name (e.g., "Flight Number 516" -> "516")
+                numbers = re.findall(r'\d+', field_name)
+                if numbers:
+                    flight_number = numbers[0]
+                    log_debug("Extracted flight number from custom field name", {"field_name": field_name, "flight_number": flight_number})
+                    break
+                # Or try to get from display_value if available
+                display_value = field.get("display_value", "")
+                if display_value and display_value.strip().isdigit():
+                    flight_number = display_value.strip()
+                    log_debug("Extracted flight number from custom field value", {"display_value": display_value, "flight_number": flight_number})
+                    break
+    
+    if not flight_number:
+        log_warning("Could not extract flight number from booking data", {"headline": headline})
     
     return flight_date, flight_number
 
