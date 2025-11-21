@@ -283,7 +283,7 @@ def extract_flight_date_and_number(booking_data: Dict[str, Any]) -> tuple:
     # Extract FlightNumber - Priority 1: From item headline (e.g., "N146WM - 2112")
     flight_number = None
     headline = availability.get("headline", "")
-    
+    print(f"Headline: {headline}")
     if headline:
         # Extract flight number from headline format: "N146WM - 2112" -> "2112"
         # Pattern: look for digits after " - " or at the end

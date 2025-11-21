@@ -115,10 +115,10 @@ def _transform_passengers(booking_data: Dict[str, Any], booking_custom_fields: D
         passenger["BahamasStay"] = custom_fields.get("Bahamas Hotel", "BHS")  # Default value as specified
         
         # Address information from booking-level custom fields
-        passenger["AddressStreet"] = booking_custom_fields.get("Address Street", "")
-        passenger["AddressCity"] = booking_custom_fields.get("Address City", "")
-        passenger["AddressState"] = booking_custom_fields.get("Address State", "")
-        passenger["AddressZIPCode"] = booking_custom_fields.get("Zip Code", "")  
+        passenger["AddressStreet"] = booking_custom_fields.get("US Address – Street", "")
+        passenger["AddressCity"] = booking_custom_fields.get("US Address – City", "")
+        passenger["AddressState"] = booking_custom_fields.get("US Address – State", "")
+        passenger["AddressZIPCode"] = booking_custom_fields.get("US Address – Zip Code", "")  
 
         passengers.append(passenger)
     
