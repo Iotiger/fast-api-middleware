@@ -78,19 +78,10 @@ async def get_flight_identifiers_from_api(booking_data: Dict[str, Any]) -> List[
             return extract_flight_numbers(booking_data)
         
         # Step 3: Extract flight list from response
-        flight_list_response = search_result.get("response", [])
+        flight_list_response = search_result.get("response", {})
         
         # Handle different response formats - could be a list directly or wrapped in an object
-        if isinstance(flight_list_response, dict):
-            # Try common keys for flight list
-            flight_list = flight_list_response.get("flights", []) or flight_list_response.get("FlightList", []) or flight_list_response.get("data", [])
-        elif isinstance(flight_list_response, list):
-            flight_list = flight_list_response
-        else:
-            log_warning("Unexpected flight search response format", {"response_type": str(type(flight_list_response))})
-            # Fallback to old method
-            return extract_flight_numbers(booking_data)
-        
+        flight_list = (flight_list_response.get("DepartFlights", []))
         if not flight_list:
             log_warning("No flights found in search response", {"search_payload": search_payload})
             # Fallback to old method
@@ -104,12 +95,12 @@ async def get_flight_identifiers_from_api(booking_data: Dict[str, Any]) -> List[
             # Fallback to old method
             return extract_flight_numbers(booking_data)
         
-        # Step 5: Find matching flight identifier
-        flight_identifier = find_flight_identifier(flight_list, flight_date, flight_number)
+        # Step 5: Find matching flight identifiers
+        flight_identifiers = find_flight_identifier(flight_list, flight_date, flight_number)
         
-        if flight_identifier:
-            log_info("Found flight identifier", {"flight_identifier": flight_identifier, "flight_date": flight_date, "flight_number": flight_number})
-            return [flight_identifier]
+        if flight_identifiers:
+            log_info("Found flight identifiers", {"flight_identifiers": flight_identifiers, "flight_date": flight_date, "flight_number": flight_number})
+            return flight_identifiers
         else:
             log_warning("Could not find matching flight identifier", {"flight_date": flight_date, "flight_number": flight_number, "flight_list_count": len(flight_list)})
             # Fallback to old method
@@ -284,29 +275,25 @@ def extract_flight_date_and_number(booking_data: Dict[str, Any]) -> tuple:
     flight_number = None
     headline = availability.get("headline", "")
     
-    # Debug: Print headline location check
-    print(f"[DEBUG] Checking headline - availability.headline: {headline}")
+    log_debug("Checking headline for flight number", {"headline": headline})
     
     if headline:
-        print(f"[DEBUG] Found headline: '{headline}'")
         # Extract flight number from headline format: "N146WM - 2112" -> "2112"
         # Pattern: look for digits after " - " or at the end
         headline_match = re.search(r'\s*-\s*(\d+)$', headline)
         if headline_match:
             flight_number = headline_match.group(1)
-            print(f"[DEBUG] Matched flight number from headline: {flight_number}")
             log_debug("Extracted flight number from headline", {"headline": headline, "flight_number": flight_number})
         else:
             # Try to find any sequence of digits at the end
             digits_match = re.search(r'(\d+)$', headline.strip())
             if digits_match:
                 flight_number = digits_match.group(1)
-                print(f"[DEBUG] Matched flight number from headline (fallback): {flight_number}")
                 log_debug("Extracted flight number from headline (fallback)", {"headline": headline, "flight_number": flight_number})
             else:
-                print(f"[DEBUG] No flight number pattern found in headline: '{headline}'")
+                log_debug("No flight number pattern found in headline", {"headline": headline})
     else:
-        print(f"[DEBUG] No headline found in availability.headline")
+        log_debug("No headline found in availability", {"availability_keys": list(availability.keys())})
     
     # Priority 2: Extract FlightNumber from custom_field_values if not found in headline
     if not flight_number:
@@ -334,9 +321,10 @@ def extract_flight_date_and_number(booking_data: Dict[str, Any]) -> tuple:
     return flight_date, flight_number
 
 
-def find_flight_identifier(flight_list: List[Dict[str, Any]], flight_date: str, flight_number: str) -> Optional[int]:
+def find_flight_identifier(flight_list: List[Dict[str, Any]], flight_date: str, flight_number: str) -> Optional[List[int]]:
     """
-    Find flight identifier from flight list that matches FlightDate and FlightNumber
+    Find flight identifiers from flight list that matches FlightDate and FlightNumber
+    Returns a list of identifiers (can contain multiple if FlightIdentifier is comma-separated)
     """
     if not flight_date or not flight_number:
         log_warning("Cannot find flight identifier - missing flight_date or flight_number", {"flight_date": flight_date, "flight_number": flight_number})
@@ -390,8 +378,29 @@ def find_flight_identifier(flight_list: List[Dict[str, Any]], flight_date: str, 
         if flight_date_only == date_only and flight_number_str == flight_number:
             flight_identifier = flight.get("FlightIdentifier") or flight.get("Identifier") or flight.get("Id")
             if flight_identifier:
-                log_info("Found matching flight", {"flight_identifier": flight_identifier, "flight_date": flight_date_str, "flight_number": flight_number_str})
-                return int(flight_identifier)
+                # FlightIdentifier might be a comma-separated string like "35437, 35440"
+                # Extract all identifiers
+                identifiers = []
+                if isinstance(flight_identifier, str):
+                    # Split by comma and extract all identifiers
+                    identifier_strs = [s.strip() for s in flight_identifier.split(",")]
+                    for identifier_str in identifier_strs:
+                        try:
+                            identifier_int = int(identifier_str)
+                            identifiers.append(identifier_int)
+                        except ValueError:
+                            log_warning("Could not parse FlightIdentifier part", {"identifier_str": identifier_str, "flight_identifier": flight_identifier})
+                    
+                    if identifiers:
+                        log_info("Found matching flight", {"flight_identifiers": identifiers, "original": flight_identifier, "flight_date": flight_date_str, "flight_number": flight_number_str})
+                        return identifiers
+                    else:
+                        log_warning("Could not parse any FlightIdentifier", {"flight_identifier": flight_identifier, "flight": flight})
+                        return None
+                else:
+                    # Already an integer, convert to list
+                    log_info("Found matching flight", {"flight_identifier": flight_identifier, "flight_date": flight_date_str, "flight_number": flight_number_str})
+                    return [int(flight_identifier)]
             else:
                 log_warning("Found matching flight but no identifier field", {"flight": flight})
     
