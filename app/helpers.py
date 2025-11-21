@@ -280,23 +280,33 @@ def extract_flight_date_and_number(booking_data: Dict[str, Any]) -> tuple:
         except Exception as e:
             log_warning("Could not parse flight date", {"start_at": start_at, "error": str(e)})
     
-    # Extract FlightNumber - Priority 1: From item headline (e.g., "N146WM - 2112")
+    # Extract FlightNumber - Priority 1: From availability headline (e.g., "N146WM - 2112")
     flight_number = None
     headline = availability.get("headline", "")
-    print(f"Headline: {headline}")
+    
+    # Debug: Print headline location check
+    print(f"[DEBUG] Checking headline - availability.headline: {headline}")
+    
     if headline:
+        print(f"[DEBUG] Found headline: '{headline}'")
         # Extract flight number from headline format: "N146WM - 2112" -> "2112"
         # Pattern: look for digits after " - " or at the end
         headline_match = re.search(r'\s*-\s*(\d+)$', headline)
         if headline_match:
             flight_number = headline_match.group(1)
+            print(f"[DEBUG] Matched flight number from headline: {flight_number}")
             log_debug("Extracted flight number from headline", {"headline": headline, "flight_number": flight_number})
         else:
             # Try to find any sequence of digits at the end
             digits_match = re.search(r'(\d+)$', headline.strip())
             if digits_match:
                 flight_number = digits_match.group(1)
+                print(f"[DEBUG] Matched flight number from headline (fallback): {flight_number}")
                 log_debug("Extracted flight number from headline (fallback)", {"headline": headline, "flight_number": flight_number})
+            else:
+                print(f"[DEBUG] No flight number pattern found in headline: '{headline}'")
+    else:
+        print(f"[DEBUG] No headline found in availability.headline")
     
     # Priority 2: Extract FlightNumber from custom_field_values if not found in headline
     if not flight_number:
