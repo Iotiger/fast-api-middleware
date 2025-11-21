@@ -81,7 +81,9 @@ async def get_flight_identifiers_from_api(booking_data: Dict[str, Any]) -> List[
         flight_list_response = search_result.get("response", {})
         
         # Handle different response formats - could be a list directly or wrapped in an object
-        flight_list = (flight_list_response.get("DepartFlights", []))
+        flight_list = flight_list_response.get("DepartFlights", [])
+        print(f"[DEBUG] Flight list: {flight_list}")
+        
         if not flight_list:
             log_warning("No flights found in search response", {"search_payload": search_payload})
             # Fallback to old method
