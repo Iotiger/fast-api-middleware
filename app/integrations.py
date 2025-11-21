@@ -23,7 +23,7 @@ from app.storage import (
 from app.transform import transform_booking_data
 from app.api_client import send_to_makersuite_api
 from app.logger import (
-    log_info, log_error, log_warning, log_webhook_request,
+    log_info, log_error, log_warning, log_debug, log_webhook_request,
     save_webhook_request_body
 )
 
@@ -84,12 +84,29 @@ async def _process_round_trip_booking(booking_data: Dict[str, Any]) -> Dict[str,
     Process a round trip booking (requires 2 webhook requests)
     """
     order_id = get_order_display_id(booking_data)
+    
+    if not order_id:
+        log_error("Round trip booking missing order_id", None, {"booking_data": booking_data})
+        return {
+            "message": "Error: Round trip booking missing order_id",
+            "timestamp": datetime.now().isoformat(),
+            "error": "Missing order_id"
+        }
+    
     log_info(f"Processing round trip booking for order {order_id}", {"order_id": order_id})
     
-    # Clean up old bookings first
-    cleanup_old_bookings()
+    # Import storage module to access stored bookings for debugging
+    from app.storage import round_trip_bookings
     
-    # Check if we already have a booking for this order
+    # Debug: Check storage state before cleanup
+    log_debug("Checking storage before processing", {
+        "order_id": order_id,
+        "has_booking": has_round_trip_booking(order_id),
+        "all_stored_orders": list(round_trip_bookings.keys())
+    })
+    
+    # Check if we already have a booking for this order BEFORE cleanup
+    # (cleanup should only happen when storing new bookings, not when checking)
     if has_round_trip_booking(order_id):
         log_info(f"Found existing booking for order {order_id}, combining flights", {"order_id": order_id})
         
@@ -153,11 +170,19 @@ async def _process_round_trip_booking(booking_data: Dict[str, Any]) -> Dict[str,
                 "error": api_result["error"]
             }
     else:
+        # Clean up old bookings before storing new one (only when storing, not when checking)
+        cleanup_old_bookings()
+        
         log_info(f"First booking for order {order_id}, storing for later", {"order_id": order_id})
         
         # Get flight identifiers from API for this booking
         flights = await get_flight_identifiers_from_api(booking_data)
         store_round_trip_booking(order_id, booking_data, flights)
+        
+        log_debug("Stored booking in storage", {
+            "order_id": order_id,
+            "all_stored_orders": list(round_trip_bookings.keys())
+        })
         
         return {
             "message": f"Round trip booking received and stored for order {order_id}. Waiting for second booking.", 
