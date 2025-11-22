@@ -98,16 +98,21 @@ async def _process_round_trip_booking(booking_data: Dict[str, Any]) -> Dict[str,
     # Import storage module to access stored bookings for debugging
     from app.storage import round_trip_bookings
     
-    # Debug: Check storage state before cleanup
+    # Debug: Check storage state BEFORE any operations
     log_debug("Checking storage before processing", {
         "order_id": order_id,
         "has_booking": has_round_trip_booking(order_id),
-        "all_stored_orders": list(round_trip_bookings.keys())
+        "all_stored_orders": list(round_trip_bookings.keys()),
+        "storage_size": len(round_trip_bookings)
     })
     
-    # Check if we already have a booking for this order BEFORE cleanup
+    # Check if we already have a booking for this order BEFORE any cleanup
     # (cleanup should only happen when storing new bookings, not when checking)
     if has_round_trip_booking(order_id):
+        log_debug("Existing booking found, proceeding to combine", {
+            "order_id": order_id,
+            "stored_booking_info": get_round_trip_booking(order_id)
+        })
         log_info(f"Found existing booking for order {order_id}, combining flights", {"order_id": order_id})
         
         # Get the existing booking data
@@ -170,8 +175,71 @@ async def _process_round_trip_booking(booking_data: Dict[str, Any]) -> Dict[str,
                 "error": api_result["error"]
             }
     else:
+        log_debug("No existing booking found, will store as first booking", {
+            "order_id": order_id,
+            "all_stored_orders": list(round_trip_bookings.keys()),
+            "storage_size": len(round_trip_bookings)
+        })
+        
         # Clean up old bookings before storing new one (only when storing, not when checking)
         cleanup_old_bookings()
+        
+        # Double-check after cleanup in case another request stored it concurrently
+        # (though this is unlikely, it's a safety check)
+        if has_round_trip_booking(order_id):
+            log_info(f"Found existing booking for order {order_id} after cleanup check, combining flights", {"order_id": order_id})
+            # Re-check and proceed to combining logic
+            existing_booking_info = get_round_trip_booking(order_id)
+            if existing_booking_info:
+                existing_booking = existing_booking_info["booking_data"]
+                
+                # Get flight identifiers from API for both bookings
+                existing_flights = await get_flight_identifiers_from_api(existing_booking)
+                current_flights = await get_flight_identifiers_from_api(booking_data)
+                
+                # Determine which is depart and which is return
+                depart_flights, return_flights = determine_flight_directions(
+                    existing_flights, current_flights, existing_booking, booking_data
+                )
+                
+                # Use the first booking's passenger data
+                combined_booking_data = existing_booking
+                
+                # Transform the combined booking data
+                transformed_data = transform_booking_data(combined_booking_data, depart_flights, return_flights)
+                log_info("Round trip data transformation completed", {
+                    "order_id": order_id,
+                    "depart_flights": depart_flights,
+                    "return_flights": return_flights,
+                    "transformed_data": transformed_data
+                })
+                
+                # Send to MakerSuite API
+                log_info("Sending round trip booking to MakerSuite API", {"order_id": order_id})
+                api_result = await send_to_makersuite_api(transformed_data)
+                
+                # Clean up the stored booking
+                remove_round_trip_booking(order_id)
+                
+                if api_result["success"]:
+                    log_info("Round trip booking successfully sent to MakerSuite API", {
+                        "order_id": order_id,
+                        "response": api_result.get("response")
+                    })
+                    return {
+                        "message": "Round trip booking processed and sent to MakerSuite successfully!", 
+                        "timestamp": datetime.now().isoformat(),
+                        "makersuite_response": api_result["response"]
+                    }
+                else:
+                    log_error("Failed to send round trip booking to MakerSuite API", api_result.get("error"), {
+                        "order_id": order_id
+                    })
+                    return {
+                        "message": "Round trip booking received but failed to send to MakerSuite", 
+                        "timestamp": datetime.now().isoformat(),
+                        "error": api_result["error"]
+                    }
         
         log_info(f"First booking for order {order_id}, storing for later", {"order_id": order_id})
         
@@ -181,7 +249,9 @@ async def _process_round_trip_booking(booking_data: Dict[str, Any]) -> Dict[str,
         
         log_debug("Stored booking in storage", {
             "order_id": order_id,
-            "all_stored_orders": list(round_trip_bookings.keys())
+            "all_stored_orders": list(round_trip_bookings.keys()),
+            "storage_size": len(round_trip_bookings),
+            "stored_flights": flights
         })
         
         return {
